@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 from models import Base
-from routers import chat, customers, orders, campaigns, receipt
+from routers import chat, customers, orders, campaigns, receipt, analytics
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -28,6 +28,7 @@ app.include_router(customers.router)
 app.include_router(orders.router)
 app.include_router(campaigns.router)
 app.include_router(receipt.router)
+app.include_router(analytics.router)
 
 @app.get("/")
 def health():

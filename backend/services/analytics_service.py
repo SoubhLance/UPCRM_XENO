@@ -32,6 +32,11 @@ def get_campaign_analytics(db: Session, campaign_id: int) -> dict:
         "channel": campaign.channel,
         "message": campaign.message,
         "created_at": campaign.created_at,
+        "sent_count": sent_cnt,
+        "delivered_count": delivered_cnt,
+        "opened_count": opened_cnt,
+        "clicked_count": clicked_cnt,
+        "failed_count": failed_cnt,
         "counts": {
             "sent": sent_cnt,
             "delivered": delivered_cnt,

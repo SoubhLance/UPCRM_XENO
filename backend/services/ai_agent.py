@@ -13,7 +13,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "query_segment",
-            "description": "Query customers from the database based on filters like days_since_last_order, segment, total_spent, channel_preference, favorite_category, churn status etc.",
+            "description": "Query customer segment statistics from the database based on filters like days_since_last_order, segment, total_spent, channel_preference, favorite_category, churn status etc. Returns segment summary stats (customer count, average spend) instead of individual customer records.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -25,7 +25,7 @@ tools = [
                     "max_total_spent": {"type": "number", "description": "Maximum total amount spent"},
                     "favorite_category": {"type": "string", "description": "Filter by favorite category: Home/Electronics/Books/Clothing"},
                     "churn": {"type": "integer", "description": "0 = active, 1 = churned"},
-                    "limit": {"type": "integer", "description": "Max customers to target (default 100)"}
+                    "limit": {"type": "integer", "description": "Max customers to target (ignored, as stats are summarized)"}
                 },
                 "required": []
             }
@@ -40,9 +40,11 @@ tools = [
                 "type": "object",
                 "properties": {
                     "days_inactive_min": {"type": "integer"},
+                    "days_inactive_max": {"type": "integer"},
                     "segment": {"type": "string"},
                     "channel_preference": {"type": "string"},
                     "min_total_spent": {"type": "number"},
+                    "max_total_spent": {"type": "number"},
                     "favorite_category": {"type": "string"},
                     "churn": {"type": "integer"}
                 },
@@ -54,17 +56,25 @@ tools = [
         "type": "function",
         "function": {
             "name": "create_and_launch_campaign",
-            "description": "Create a campaign and send personalized messages to the queried customers",
+            "description": "Create a campaign and send personalized messages to the targeted customers (resolved automatically on the backend using filters or segment)",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "campaign_name": {"type": "string", "description": "Name of the campaign"},
                     "message_template": {"type": "string", "description": "Message template. Use {name}, {favorite_category}, {days_since_last_order} as placeholders"},
                     "channel": {"type": "string", "description": "Channel to use: whatsapp/sms/email. Use customer's preference if 'auto'"},
-                    "customer_ids": {"type": "array", "items": {"type": "integer"}, "description": "List of customer_ids to target"},
+                    "customer_ids": {"type": "array", "items": {"type": "integer"}, "description": "Optional: List of customer_ids to target. If not provided, segment/filters will be used instead."},
+                    "segment": {"type": "string", "description": "Optional: Target segment name (e.g. 'high_value_customers', 'inactive_customers')"},
+                    "days_inactive_min": {"type": "integer", "description": "Optional: Filter by minimum days since last order"},
+                    "days_inactive_max": {"type": "integer", "description": "Optional: Filter by maximum days since last order"},
+                    "channel_preference": {"type": "string", "description": "Optional: Filter by channel preference"},
+                    "min_total_spent": {"type": "number", "description": "Optional: Filter by minimum total spent"},
+                    "max_total_spent": {"type": "number", "description": "Optional: Filter by maximum total spent"},
+                    "favorite_category": {"type": "string", "description": "Optional: Filter by favorite category"},
+                    "churn": {"type": "integer", "description": "Optional: Filter by churn status (0/1)"},
                     "goal": {"type": "string", "description": "Original campaign goal"}
                 },
-                "required": ["campaign_name", "message_template", "channel", "customer_ids", "goal"]
+                "required": ["campaign_name", "message_template", "channel", "goal"]
             }
         }
     },
@@ -119,32 +129,49 @@ def execute_tool(tool_name: str, tool_input: dict, db: Session, goal: str = ""):
         return {"total_customers": count, "segment_breakdown": segments, "channel_breakdown": channels}
 
     elif tool_name == "query_segment":
+        from sqlalchemy import func
         query = db.query(Customer)
         query = apply_filters(query, tool_input)
-        limit = tool_input.get("limit", 100)
-        customers = query.limit(limit).all()
+        customer_count = query.count()
+        
+        avg_query = db.query(func.avg(Customer.total_spent))
+        avg_query = apply_filters(avg_query, tool_input)
+        avg_spend_val = avg_query.scalar()
+        avg_spend = round(float(avg_spend_val), 2) if avg_spend_val is not None else 0.0
+        
+        segment_name = tool_input.get("segment") or "custom_segment"
+        
         return {
-            "total": len(customers),
-            "customers": [
-                {
-                    "customer_id": c.customer_id,
-                    "name": c.name,
-                    "channel_preference": c.channel_preference,
-                    "segment": c.segment,
-                    "days_since_last_order": c.days_since_last_order,
-                    "favorite_category": c.favorite_category,
-                    "total_spent": c.total_spent
-                }
-                for c in customers
-            ]
+            "customer_count": customer_count,
+            "avg_spend": avg_spend,
+            "segment": segment_name
         }
 
     elif tool_name == "create_and_launch_campaign":
-        customer_ids = tool_input["customer_ids"]
+        customer_ids = tool_input.get("customer_ids")
+        segment_name = tool_input.get("segment") or "auto"
+        
+        if not customer_ids:
+            # Check for filter criteria in tool_input
+            filter_keys = ["days_inactive_min", "days_inactive_max", "segment", "channel_preference", "min_total_spent", "max_total_spent", "favorite_category", "churn"]
+            has_filters = any(k in tool_input for k in filter_keys)
+            
+            if has_filters:
+                query = db.query(Customer)
+                query = apply_filters(query, tool_input)
+                # Cap targeting at 100 for safety, similar to standard campaign creation
+                customers = query.limit(100).all()
+                customer_ids = [c.customer_id for c in customers]
+            elif tool_input.get("segment"):
+                customers = campaign_service.get_target_customers(db, tool_input["segment"])
+                customer_ids = [c.customer_id for c in customers[:100]]
+            else:
+                customer_ids = []
+
         campaign = campaign_service.create_campaign_for_customers(
             db=db,
             campaign_name=tool_input["campaign_name"],
-            segment_name="auto",
+            segment_name=segment_name,
             channel=tool_input["channel"],
             message=tool_input["message_template"],
             customer_ids=customer_ids
@@ -315,8 +342,5 @@ Keep messages friendly, personal and include a clear offer/CTA."""
                 "name": tool_name,
                 "content": json.dumps(result)
             })
-            
-            # Append execution outcome representation to final text output
-            response_text += f"\n\n🔧 *{tool_name}* → {json.dumps(result, indent=2)}\n"
 
     return response_text

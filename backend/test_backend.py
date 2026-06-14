@@ -15,30 +15,22 @@ async def run_tests():
     print("====================================================")
 
     # 1. Reset database for clean verification
-    print("\n[Step 1] Resetting SQLite database...")
-    db_path = "db/xeno_crm.db"
-    
+    print("\n[Step 1] Resetting database...")
+    db = SessionLocal()
     try:
-        if os.path.exists(db_path):
-            os.remove(db_path)
-        Base.metadata.create_all(bind=engine)
-        print("Clean database initialized by recreating file.")
-    except PermissionError:
-        print("Database file is locked by another process. Clearing table rows instead...")
-        Base.metadata.create_all(bind=engine)
-        db = SessionLocal()
-        try:
-            db.query(CampaignEvent).delete()
-            db.query(Campaign).delete()
-            db.query(Order).delete()
-            db.query(Customer).delete()
-            db.commit()
-            print("All table records cleared successfully.")
-        except Exception as e:
-            print(f"Failed to clear table records: {e}")
-            db.rollback()
-        finally:
-            db.close()
+        db.query(CampaignEvent).delete()
+        db.query(Campaign).delete()
+        db.query(Order).delete()
+        db.query(Customer).delete()
+        db.commit()
+        print("All database table records cleared successfully.")
+    except Exception as e:
+        print(f"Failed to clear table records: {e}")
+        db.rollback()
+    finally:
+        db.close()
+        
+    Base.metadata.create_all(bind=engine)
 
     # Route requests directly to FastAPI app via ASGITransport
     transport = httpx.ASGITransport(app=app)

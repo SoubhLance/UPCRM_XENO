@@ -13,6 +13,7 @@ def get_customers(
     segment: Optional[str] = None,
     channel: Optional[str] = None,
     days_inactive_min: Optional[int] = None,
+    search: Optional[str] = None,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db)
@@ -24,6 +25,12 @@ def get_customers(
         query = query.filter(Customer.channel_preference == channel)
     if days_inactive_min:
         query = query.filter(Customer.days_since_last_order >= days_inactive_min)
+    if search:
+        query = query.filter(
+            Customer.name.ilike(f"%{search}%") |
+            Customer.email_addr.ilike(f"%{search}%") |
+            Customer.phone.ilike(f"%{search}%")
+        )
     
     customers = query.offset(offset).limit(limit).all()
     return customers

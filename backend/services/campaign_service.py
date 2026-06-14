@@ -92,6 +92,76 @@ async def dispatch_campaign_async(campaign_id: int, customer_ids: list, channel:
     if tasks:
         await asyncio.gather(*tasks)
 
+    # After campaign execution completes, send ONE summary email to the developer
+    from services.email_service import send_email
+    import re
+    
+    db = SessionLocal()
+    try:
+        camp = db.query(Campaign).filter(Campaign.campaign_id == campaign_id).first()
+        if camp:
+            # Parse the offer from the campaign message
+            offer_text = "N/A"
+            if camp.message:
+                match = re.search(r'(\d+%\s*(?:off|OFF|discount|DISCOUNT)?)', camp.message)
+                if match:
+                    val = match.group(1)
+                    if "%" in val and not any(x in val.lower() for x in ["off", "discount"]):
+                        offer_text = f"{val.strip()} OFF"
+                    else:
+                        offer_text = val.strip()
+            
+            # Format the segment nicely
+            segment_name = camp.segment
+            if segment_name == "inactive_customers":
+                segment_name = "Inactive Customers (>90 days)"
+            elif segment_name == "vip_customers":
+                segment_name = "VIP Customers"
+            elif segment_name == "frequent_buyers":
+                segment_name = "Frequent Buyers"
+            elif segment_name == "electronics_lovers":
+                segment_name = "Electronics Lovers"
+            elif segment_name == "high_value_customers":
+                segment_name = "High-Value Customers"
+            elif segment_name:
+                segment_name = segment_name.title()
+                
+            email_body = f"""Hello Soubhik,
+
+UPCRM has successfully executed a customer re-engagement campaign.
+
+Campaign:
+{camp.campaign_name}
+
+Segment:
+{segment_name}
+
+Offer:
+{offer_text}
+
+Execution Summary
+
+Customers Targeted: {len(customer_ids)}
+Delivered: {camp.delivered_count}
+Opened: {camp.opened_count}
+Clicked: {camp.clicked_count}
+Failed: {camp.failed_count}
+
+Gemini 2.5 Flash acted as the primary AI provider with automatic Groq fallback.
+
+Regards,
+UPCRM Team"""
+
+            send_email(
+                receiver="soubhiksadhuri12@gmail.com",
+                subject="UPCRM | Campaign Successfully Executed",
+                body=email_body
+            )
+    except Exception as email_err:
+        print(f"[Campaign Service] Error sending execution summary email: {email_err}")
+    finally:
+        db.close()
+
 def run_campaign_dispatch_in_background(campaign_id: int, customer_ids: list, channel: str, message: str):
     """
     Target function for the background thread to run the async dispatch loop.
